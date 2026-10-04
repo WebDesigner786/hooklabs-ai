@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for security enforcement
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // User collection rules
+    match /users/{userId} {
+      // Users can only read their own user profile document
+      allow read: if isOwner(userId);
+
+      // Users can only create their own document with default free tier values
+      allow create: if isOwner(userId)
+                    && request.resource.data.uid == userId
+                    && request.resource.data.tier == 'free'
+                    && request.resource.data.creditsRemaining == 10
+                    && request.resource.data.createdAt != null;
+
+      // Restrict client updates:
+      // - Must be owner
+      // - Immutable fields: uid, createdAt, tier
+      // - Credits can only be decremented by 1 (no client credit inflation)
+      allow update: if isOwner(userId)
+                    && request.resource.data.uid == resource.data.uid
+                    && request.resource.data.tier == resource.data.tier
+                    && request.resource.data.createdAt == resource.data.createdAt
+                    && request.resource.data.creditsRemaining == resource.data.creditsRemaining - 1
+                    && resource.data.creditsRemaining > 0;
+
+      // Deletion is disallowed to preserve credit audit integrity
+      allow delete: if false;
+    }
+
+    // Default deny for all other collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
