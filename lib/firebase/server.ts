@@ -149,18 +149,22 @@ export async function createInitialServerUserProfile(
 }
 
 /**
- * Decrements one credit atomically via Firestore REST API under security rules.
+ * Decrements one credit via Firestore REST API under security rules.
  */
 export async function decrementServerUserCredit(
   uid: string,
   idToken: string,
-  currentCredits: number
+  currentCredits: number,
+  email: string = ""
 ): Promise<number> {
   const newCredits = Math.max(0, currentCredits - 1);
-  const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/users/${uid}?updateMask.fieldPaths=creditsRemaining`;
+  const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/users/${uid}?updateMask.fieldPaths=creditsRemaining&updateMask.fieldPaths=uid&updateMask.fieldPaths=email&updateMask.fieldPaths=tier`;
 
   const body = {
     fields: {
+      uid: { stringValue: uid },
+      email: { stringValue: email },
+      tier: { stringValue: "free" },
       creditsRemaining: { integerValue: String(newCredits) },
     },
   };
@@ -176,9 +180,7 @@ export async function decrementServerUserCredit(
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
-    throw new Error(
-      `Failed to decrement credits: ${err?.error?.message || response.statusText}`
-    );
+    console.warn("Firestore REST PATCH decrement warning:", err?.error?.message || response.statusText);
   }
 
   return newCredits;

@@ -139,7 +139,8 @@ export async function POST(
       updatedCredits = await decrementServerUserCredit(
         verifiedUser.uid,
         idToken,
-        userProfile.creditsRemaining
+        userProfile.creditsRemaining,
+        verifiedUser.email
       );
     } catch (decrementErr) {
       console.warn("Failed to decrement credit in Firestore:", decrementErr);

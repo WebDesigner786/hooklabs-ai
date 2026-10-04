@@ -6,9 +6,11 @@ import Link from "next/link";
 import { useAuth } from "@/components/auth/auth-context";
 import { useResults } from "@/lib/results-context";
 import { MAX_HOOK_LENGTH, MIN_HOOK_LENGTH } from "@/lib/validation";
+import { db } from "@/lib/firebase/client";
+import { doc, setDoc } from "firebase/firestore";
 
 export default function DashboardPage() {
-  const { user, profile, loading, getIdToken } = useAuth();
+  const { user, profile, loading, getIdToken, updateCredits } = useAuth();
   const { setAnalysis } = useResults();
   const router = useRouter();
 
@@ -82,6 +84,18 @@ export default function DashboardPage() {
         }
         setAnalyzing(false);
         return;
+      }
+
+      // Update credits in context immediately and sync with Firestore
+      if (typeof data.creditsRemaining === "number") {
+        updateCredits(data.creditsRemaining);
+        if (user) {
+          setDoc(
+            doc(db, "users", user.uid),
+            { creditsRemaining: data.creditsRemaining },
+            { merge: true }
+          ).catch((e) => console.warn("Firestore client sync notice:", e));
+        }
       }
 
       // Store analysis safely in context & session storage

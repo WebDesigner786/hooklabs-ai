@@ -35,6 +35,7 @@ interface AuthContextType {
   getIdToken: () => Promise<string | null>;
   authErrorDetails: AuthErrorDetails | null;
   clearAuthError: () => void;
+  updateCredits: (newCredits: number) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -245,6 +246,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthErrorDetails(null);
   }, []);
 
+  const updateCredits = useCallback((newCredits: number) => {
+    setProfile((prev) => {
+      if (!prev) return prev;
+      return { ...prev, creditsRemaining: newCredits };
+    });
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -257,6 +265,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         getIdToken,
         authErrorDetails,
         clearAuthError,
+        updateCredits,
       }}
     >
       {children}

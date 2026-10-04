@@ -11,7 +11,7 @@ export default function ResultsPage() {
 
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  const credits = profile?.creditsRemaining ?? analysis?.creditsRemaining ?? 0;
+  const credits = analysis?.creditsRemaining ?? profile?.creditsRemaining ?? 0;
 
   const handleCopy = async (text: string, index: number) => {
     try {
