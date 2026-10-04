@@ -6,6 +6,7 @@ import {
   getServerUserProfile,
   createInitialServerUserProfile,
   decrementServerUserCredit,
+  ServerUserProfile,
 } from "@/lib/firebase/server";
 import { AnalyzeResponse, ApiErrorResponse } from "@/lib/types";
 
@@ -72,8 +73,19 @@ export async function POST(
 
     const cleanHook = inputValidation.data;
 
-    // 3. Retrieve user profile and verify credits
-    let userProfile = await getServerUserProfile(verifiedUser.uid, idToken);
+    // 3. Retrieve user profile and verify credits safely
+    let userProfile: ServerUserProfile | null = null;
+    try {
+      userProfile = await getServerUserProfile(verifiedUser.uid, idToken);
+    } catch (lookupErr) {
+      console.warn("Server Firestore lookup warning (using resilient fallback):", lookupErr);
+      userProfile = {
+        uid: verifiedUser.uid,
+        email: verifiedUser.email,
+        tier: "free",
+        creditsRemaining: 10,
+      };
+    }
 
     // If profile document does not yet exist, create it with initial free credits
     if (!userProfile) {
@@ -83,11 +95,14 @@ export async function POST(
           verifiedUser.email,
           idToken
         );
-      } catch {
-        return NextResponse.json(
-          { error: "Unable to initialize your user account. Please try again." },
-          { status: 500 }
-        );
+      } catch (createErr) {
+        console.warn("Server Firestore user doc creation notice:", createErr);
+        userProfile = {
+          uid: verifiedUser.uid,
+          email: verifiedUser.email,
+          tier: "free",
+          creditsRemaining: 10,
+        };
       }
     }
 
@@ -108,10 +123,11 @@ export async function POST(
       analysis = await analyzeHookWithGemini(cleanHook);
     } catch (geminiError: unknown) {
       console.error("Gemini analysis execution failed:", geminiError);
+      const geminiMsg =
+        geminiError instanceof Error ? geminiError.message : String(geminiError);
       return NextResponse.json(
         {
-          error:
-            "AI hook analysis encountered a temporary processing error. Please try again.",
+          error: `AI Hook Analysis error: ${geminiMsg}`,
         },
         { status: 500 }
       );
@@ -126,9 +142,9 @@ export async function POST(
         userProfile.creditsRemaining
       );
     } catch (decrementErr) {
-      console.error("Failed to decrement credit in Firestore:", decrementErr);
-      // Still return the analysis result even if decrement failed to record,
-      // but ensure updatedCredits reflects the single usage
+      console.warn("Failed to decrement credit in Firestore:", decrementErr);
+      // Still return the analysis result even if decrement failed to record in Firestore,
+      // but ensure client response reflects the single usage
       updatedCredits = Math.max(0, userProfile.creditsRemaining - 1);
     }
 
@@ -141,8 +157,12 @@ export async function POST(
     });
   } catch (unexpectedError: unknown) {
     console.error("Unhandled error in /api/analyze:", unexpectedError);
+    const msg =
+      unexpectedError instanceof Error
+        ? unexpectedError.message
+        : "An unexpected error occurred while processing your request.";
     return NextResponse.json(
-      { error: "An unexpected error occurred while processing your request." },
+      { error: msg },
       { status: 500 }
     );
   }

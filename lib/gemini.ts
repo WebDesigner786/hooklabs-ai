@@ -78,8 +78,68 @@ If the submitted hook is extremely short, unclear, or weak, still return the req
 
 NEVER return invalid JSON.`;
 
+async function executeGeminiGeneration(
+  ai: GoogleGenAI,
+  modelName: string,
+  hook: string
+): Promise<HookAnalysis> {
+  const response = await ai.models.generateContent({
+    model: modelName,
+    contents: `Opening hook to analyze:\n"${hook}"`,
+    config: {
+      systemInstruction: GEMINI_SYSTEM_PROMPT,
+      responseMimeType: "application/json",
+      responseJsonSchema: {
+        type: Type.OBJECT,
+        properties: {
+          score: {
+            type: Type.NUMBER,
+            description: "Numeric retention score from 0 to 10",
+          },
+          critique: {
+            type: Type.STRING,
+            description: "Exactly two sentences explaining retention weaknesses",
+          },
+          rewrites: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.STRING,
+            },
+            description: "Exactly 5 distinct viral hook rewrites",
+          },
+        },
+        required: ["score", "critique", "rewrites"],
+        propertyOrdering: ["score", "critique", "rewrites"],
+      },
+      temperature: 0.3,
+    },
+  });
+
+  const rawText = response.text?.trim() || "";
+  if (!rawText) {
+    throw new Error("Empty response received from Gemini API.");
+  }
+
+  // Strip any markdown code fences if inadvertently present
+  const sanitized = rawText
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/, "")
+    .trim();
+
+  const parsedJson = JSON.parse(sanitized);
+  const validation = validateGeminiAnalysis(parsedJson);
+
+  if (!validation.valid || !validation.data) {
+    throw new Error(validation.error || "AI returned malformed analysis.");
+  }
+
+  return validation.data;
+}
+
 /**
  * Analyzes a short-form video hook using Gemini API with structured JSON output.
+ * Automatically handles model failovers (e.g. 503 high-demand or deprecated models).
  */
 export async function analyzeHookWithGemini(hook: string): Promise<HookAnalysis> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -88,63 +148,35 @@ export async function analyzeHookWithGemini(hook: string): Promise<HookAnalysis>
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  const modelName = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+  const configuredModel = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 
   try {
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents: `Opening hook to analyze:\n"${hook}"`,
-      config: {
-        systemInstruction: GEMINI_SYSTEM_PROMPT,
-        responseMimeType: "application/json",
-        responseJsonSchema: {
-          type: Type.OBJECT,
-          properties: {
-            score: {
-              type: Type.NUMBER,
-              description: "Numeric retention score from 0 to 10",
-            },
-            critique: {
-              type: Type.STRING,
-              description: "Exactly two sentences explaining retention weaknesses",
-            },
-            rewrites: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.STRING,
-              },
-              description: "Exactly 5 distinct viral hook rewrites",
-            },
-          },
-          required: ["score", "critique", "rewrites"],
-          propertyOrdering: ["score", "critique", "rewrites"],
-        },
-        temperature: 0.3,
-      },
-    });
-
-    const rawText = response.text?.trim() || "";
-    if (!rawText) {
-      throw new Error("Empty response received from Gemini API.");
-    }
-
-    // Strip any markdown code fences if inadvertently present
-    const sanitized = rawText
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/```$/, "")
-      .trim();
-
-    const parsedJson = JSON.parse(sanitized);
-    const validation = validateGeminiAnalysis(parsedJson);
-
-    if (!validation.valid || !validation.data) {
-      throw new Error(validation.error || "AI returned malformed analysis.");
-    }
-
-    return validation.data;
+    return await executeGeminiGeneration(ai, configuredModel, hook);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "AI generation failed";
-    throw new Error(`Gemini analysis error: ${msg}`);
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `Primary Gemini model (${configuredModel}) call failed: ${errorMsg}. Evaluating fallback...`
+    );
+
+    // If configured model hits 503 high-demand or 404 retired model, seamlessly fall back to gemini-3.5-flash-lite
+    if (
+      configuredModel !== "gemini-3.5-flash-lite" &&
+      (errorMsg.includes("503") ||
+        errorMsg.includes("404") ||
+        errorMsg.includes("UNAVAILABLE") ||
+        errorMsg.includes("NOT_FOUND") ||
+        errorMsg.includes("no longer available"))
+    ) {
+      console.log("Engaging resilient Gemini model fallback: gemini-3.5-flash-lite");
+      try {
+        return await executeGeminiGeneration(ai, "gemini-3.5-flash-lite", hook);
+      } catch (fallbackErr: unknown) {
+        const fallbackMsg =
+          fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        throw new Error(`Gemini analysis error: ${fallbackMsg}`);
+      }
+    }
+
+    throw new Error(`Gemini analysis error: ${errorMsg}`);
   }
 }
