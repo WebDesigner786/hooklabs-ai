@@ -10,6 +10,8 @@ import React, {
 import {
   User,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signOut,
   onAuthStateChanged,
 } from "firebase/auth";
@@ -31,6 +33,28 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function mapFirebaseErrorMessage(error: { code?: string; message?: string }): string {
+  const code = error.code || "";
+  switch (code) {
+    case "auth/unauthorized-domain":
+      return "Domain not authorized: If browsing via http://127.0.0.1:3000 or a network IP, please switch to http://localhost:3000, or add your current domain in Firebase Console > Authentication > Settings > Authorized domains.";
+    case "auth/operation-not-allowed":
+    case "auth/configuration-not-found":
+      return "Google Sign-In is not enabled: In Firebase Console, go to Authentication > Sign-in method, click Google, and enable it.";
+    case "auth/popup-blocked":
+      return "Popup blocked: Your browser blocked the Google Sign-In popup. Please allow popups for this site and try again.";
+    case "auth/invalid-api-key":
+      return "Invalid Firebase API Key: Please verify NEXT_PUBLIC_FIREBASE_API_KEY in .env.local.";
+    case "auth/network-request-failed":
+      return "Network connection to Firebase failed: Please check your internet connection or disable ad-blockers that may block Google Firebase services.";
+    default:
+      if (error.message) {
+        return `${error.message} (${code || "auth-error"})`;
+      }
+      return "Could not sign in with Google. Please check your network connection and try again.";
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isConfigured] = useState(() => isFirebaseConfigured());
   const [user, setUser] = useState<User | null>(null);
@@ -38,6 +62,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(() => isFirebaseConfigured());
   const [authError, setAuthError] = useState<string | null>(null);
 
+  // Check for redirect result on mount (for browsers that block popups)
+  useEffect(() => {
+    if (!isConfigured) return;
+
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result && result.user) {
+          setUser(result.user);
+          try {
+            const userDoc = await ensureUserProfile(result.user);
+            setProfile(userDoc);
+          } catch (err) {
+            console.warn("Could not sync Firestore profile upon redirect:", err);
+            setProfile({
+              uid: result.user.uid,
+              email: result.user.email || "",
+              tier: "free",
+              creditsRemaining: 10,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+      })
+      .catch((err: unknown) => {
+        console.error("Redirect sign-in error:", err);
+        const error = err as { code?: string; message?: string };
+        setAuthError(mapFirebaseErrorMessage(error));
+      });
+  }, [isConfigured]);
+
+  // Auth state listener
   useEffect(() => {
     if (!isConfigured) {
       return;
@@ -50,7 +105,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const userDoc = await ensureUserProfile(currentUser);
           setProfile(userDoc);
         } catch (err) {
-          console.error("Failed to ensure user profile:", err);
+          console.warn("Firestore user sync notice:", err);
+          // Set in-memory profile so user is not blocked from dashboard
+          setProfile((existing) =>
+            existing || {
+              uid: currentUser.uid,
+              email: currentUser.email || "",
+              tier: "free",
+              creditsRemaining: 10,
+              createdAt: new Date().toISOString(),
+            }
+          );
         }
       } else {
         setProfile(null);
@@ -88,8 +153,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const result = await signInWithPopup(auth, googleProvider);
       if (result.user) {
-        const userDoc = await ensureUserProfile(result.user);
-        setProfile(userDoc);
+        setUser(result.user);
+        try {
+          const userDoc = await ensureUserProfile(result.user);
+          setProfile(userDoc);
+        } catch (firestoreErr) {
+          console.warn("Firestore profile creation notice:", firestoreErr);
+          // If Firestore is still being set up or rules pending, allow login with starter profile
+          setProfile({
+            uid: result.user.uid,
+            email: result.user.email || "",
+            tier: "free",
+            creditsRemaining: 10,
+            createdAt: new Date().toISOString(),
+          });
+        }
       }
     } catch (err: unknown) {
       const error = err as { code?: string; message?: string };
@@ -97,13 +175,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         error.code === "auth/popup-closed-by-user" ||
         error.code === "auth/cancelled-popup-request"
       ) {
-        // User closed the popup intentionally, ignore without error banner
         return;
       }
+
+      // If browser blocked popup, attempt redirect sign-in
+      if (error.code === "auth/popup-blocked") {
+        console.warn("Popup blocked. Attempting redirect sign-in fallback...");
+        try {
+          await signInWithRedirect(auth, googleProvider);
+          return;
+        } catch (redirectErr: unknown) {
+          const rError = redirectErr as { code?: string; message?: string };
+          setAuthError(mapFirebaseErrorMessage(rError));
+          return;
+        }
+      }
+
       console.error("Sign-in failure:", err);
-      setAuthError(
-        "Could not sign in with Google. Please check your network connection and try again."
-      );
+      setAuthError(mapFirebaseErrorMessage(error));
     }
   }, [isConfigured]);
 
