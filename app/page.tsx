@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/components/auth/auth-context";
 
 export default function LandingPage() {
-  const { user, signInWithGoogle, isConfigured, authError, clearAuthError } =
+  const { user, signInWithGoogle, isConfigured, authErrorDetails, clearAuthError } =
     useAuth();
 
   return (
@@ -47,15 +47,30 @@ export default function LandingPage() {
         </p>
 
         {/* Error Banner if auth failure */}
-        {authError && (
-          <div className="mx-auto mt-4 max-w-md rounded-lg border border-rose-800/80 bg-rose-950/50 p-3 text-xs text-rose-300 flex items-center justify-between">
-            <span>{authError}</span>
-            <button
-              onClick={clearAuthError}
-              className="text-rose-400 hover:text-white ml-2 text-sm font-bold"
-            >
-              &times;
-            </button>
+        {authErrorDetails && (
+          <div className="mx-auto mt-6 max-w-xl text-left rounded-xl border border-rose-800/90 bg-rose-950/80 p-4 text-xs text-rose-200 shadow-xl backdrop-blur-sm">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2 font-bold text-rose-300">
+                <svg className="h-4 w-4 shrink-0 text-rose-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clipRule="evenodd" />
+                </svg>
+                <span>Sign-In Issue: {authErrorDetails.code}</span>
+              </div>
+              <button
+                type="button"
+                onClick={clearAuthError}
+                className="text-rose-400 hover:text-white ml-2 text-base font-bold leading-none"
+              >
+                &times;
+              </button>
+            </div>
+            <p className="mt-2 text-rose-300 font-mono text-[11px] bg-black/50 p-2 rounded border border-rose-900/60 break-words">
+              {authErrorDetails.message}
+            </p>
+            <div className="mt-3 text-white bg-rose-900/40 p-2.5 rounded-lg border border-rose-800/60 text-xs">
+              <span className="font-semibold text-rose-200">How to fix this: </span>
+              {authErrorDetails.resolution}
+            </div>
           </div>
         )}
 
